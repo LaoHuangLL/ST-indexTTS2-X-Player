@@ -668,10 +668,46 @@
     };
     const textEmotionAliasMap = { 通常: '温柔' };
 
+    // 常见但不在 48 词表里的说法 -> 最接近的合法词。LLM 经常自由发挥，没这一层就会静默失效。
+    const textEmotionFallbackMap = {
+        命令: '傲慢', 严肃: '平静', 冷静: '平静', 坚定: '平静', 自信: '傲慢', 果决: '平静',
+        挑衅: '傲慢', 轻蔑: '嫌弃', 不屑: '嫌弃', 鄙视: '嫌弃', 得意: '傲慢', 冷酷: '傲慢', 冷漠: '傲慢', 冷淡: '平静',
+        嘲讽: '讽刺', 讥讽: '讽刺', 挖苦: '讽刺', 冷笑: '讽刺',
+        撒娇: '害羞', 娇嗔: '傲娇', 黏人: '宠溺', 亲昵: '宠溺', 溺爱: '宠溺',
+        玩笑: '调侃', 打趣: '调侃', 逗弄: '调侃',
+        焦急: '紧张', 着急: '紧张', 急躁: '烦躁', 焦虑: '紧张', 担心: '忧虑', 不安: '忧虑', 犹豫: '忧虑',
+        慌张: '慌乱', 惊恐: '惶恐', 尖叫: '惶恐', 恐惧: '害怕', 惧怕: '害怕', 胆怯: '害怕', 颤栗: '害怕', 颤抖: '害怕', 发抖: '害怕',
+        愤怒: '生气', 暴怒: '气急败坏', 恼怒: '生气', 恼火: '烦躁', 怒火: '生气', 火气: '生气', 不满: '烦躁', 抱怨: '烦躁', 恼羞: '羞愤', 咆哮: '气急败坏', 怒吼: '气急败坏', 大喊: '生气', 喊叫: '生气',
+        伤心: '悲伤', 难过: '悲伤', 哭泣: '悲伤', 抽泣: '悲伤', 哽咽: '悲伤', 哭腔: '悲伤',
+        疲惫: '低落', 疲倦: '低落', 疲惫不堪: '低落', 消沉: '低落',
+        高兴: '开心', 快乐: '开心', 喜悦: '开心', 愉快: '开心', 微笑: '开心', 大笑: '开心', 笑: '开心',
+        兴奋: '惊喜', 激动: '惊喜', 吃惊: '惊讶', 震惊: '大惊失色', 疑惑: '略感意外', 困惑: '略感意外', 意外: '略感意外',
+        轻声: '温柔', 柔声: '温柔', 低语: '平静', 喃喃: '平静', 沉默: '平静', 低吟: '平静',
+        叹气: '无奈', 叹息: '无奈', 无语: '无奈', 为难: '无奈',
+        自豪: '欣慰', 感动: '欣慰', 认真: '平静', 郑重: '平静', 决绝: '平静'
+    };
+
     function getEmotionVectorFromText(label) {
         const normalized = (label || '').trim().replace(/\s+/g, '');
         if (!normalized) return null;
-        const canonical = textEmotionVectorMap[normalized] ? normalized : textEmotionAliasMap[normalized];
+        let canonical = textEmotionVectorMap[normalized] ? normalized
+            : (textEmotionAliasMap[normalized] || textEmotionFallbackMap[normalized]);
+        if (!canonical) {
+            // 原文里含合法词（取最长命中），例如「又惊又喜」-> 惊喜
+            let best = '';
+            for (const k of Object.keys(textEmotionVectorMap)) {
+                if (k.length > best.length && normalized.includes(k)) best = k;
+            }
+            canonical = best;
+        }
+        if (!canonical) {
+            // 原文里含别名词（取最长命中），例如「有点小得意」-> 得意 -> 傲慢
+            let best = '';
+            for (const k of Object.keys(textEmotionFallbackMap)) {
+                if (k.length > best.length && normalized.includes(k)) best = k;
+            }
+            canonical = best ? textEmotionFallbackMap[best] : '';
+        }
         return canonical ? textEmotionVectorMap[canonical] : null;
     }
 
