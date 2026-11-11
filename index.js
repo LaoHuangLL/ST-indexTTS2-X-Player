@@ -881,6 +881,19 @@ EXAMPLE OUTPUT:
         throw new Error('当前 SillyTavern 版本不提供 generateQuietPrompt / generateRaw');
     }
 
+    // 提示词里可以用 {{正文}} / {{text}} / {{input}} / {{body}} / {{内容}} / {{原文}} 指定正文位置；
+    // 不写占位符时，正文会自动接在提示词后面。替换用函数形式，避免正文里的 $& 被当成替换模式。
+    const EXTRACT_TEXT_PLACEHOLDER = /\{\{\s*(?:text|input|body|正文|内容|原文)\s*\}\}/gi;
+    const EXTRACT_TEXT_PLACEHOLDER_TEST = /\{\{\s*(?:text|input|body|正文|内容|原文)\s*\}\}/i;
+
+    function buildExtractInstruction(template, text) {
+        const tpl = String(template || DEFAULT_EXTRACT_PROMPT);
+        if (EXTRACT_TEXT_PLACEHOLDER_TEST.test(tpl)) {
+            return tpl.replace(EXTRACT_TEXT_PLACEHOLDER, () => text);
+        }
+        return tpl + '\n\n---\n[ASSISTANT REPLY TO EXTRACT - START]\n' + text + '\n[ASSISTANT REPLY TO EXTRACT - END]\n\nNow output ONLY the script lines.';
+    }
+
     async function extractVNWithLLM(text, mesId) {
         const cfg = getExtractConfig();
         if (!cfg.enabled) return null;
@@ -908,7 +921,7 @@ EXAMPLE OUTPUT:
                 return null;
             }
         }
-        const instruct = cfg.prompt + '\n\n---\n[ASSISTANT REPLY TO EXTRACT - START]\n' + plain + '\n[ASSISTANT REPLY TO EXTRACT - END]\n\nNow output ONLY the script lines.';
+        const instruct = buildExtractInstruction(cfg.prompt, plain);
         const t0 = performance.now();
         let raw = '';
         try {

@@ -324,6 +324,47 @@ GAL 模式要求消息里带 `[角色名]` 这类方括号标签。如果你的 
 | 漏句阈值 | 0.6 | 提取行数 < 引号对数 × 该值 → 判定漏句并回退 |
 | 提取提示词 | 留空 | 留空使用内置模板；可自行改写（换情绪词表、改 Narrator 的名字等）|
 
+**提取提示词怎么写：**
+
+留空就使用内置模板（英文规则 + 中文情绪词表）。正文**不需要你填** —— 插件会自动把这条回复接在提示词后面，形如：
+
+```
+---
+[ASSISTANT REPLY TO EXTRACT - START]
+<这条回复的原文>
+[ASSISTANT REPLY TO EXTRACT - END]
+
+Now output ONLY the script lines.
+```
+
+如果想把正文放到提示词指定的位置，就在模板里写 `{{text}}`（也支持 `{{正文}}` / `{{input}}` / `{{body}}` / `{{内容}}` / `{{原文}}`），插件会把占位符替换成正文，不再自动追加。
+
+下面这份可以直接整段粘贴进「提取提示词」：
+
+```text
+You are a dialogue EXTRACTOR for a text-to-speech player. Below the separator you will find one chat reply; extract every spoken line from it.
+
+RULES (strict):
+1. Copy the dialogue VERBATIM from inside quotation marks ("...", "...", "..." or "..."). Never paraphrase, translate, shorten, merge or add words. Keep the original language and punctuation.
+2. Output one line per utterance, in the exact original order.
+3. Line format: [Speaker][Emotion]"dialogue"
+4. Speaker: whoever says that line. Infer it from a leading "Name:" prefix, or from the narration right before or after the quote. Narration itself is NEVER spoken. If you cannot tell, use Narrator.
+5. Emotion: pick EXACTLY ONE word from the list below, copied character for character. These are Chinese words - DO NOT translate them, DO NOT invent English ones, DO NOT wrap them in quotes or brackets:
+开心 生气 悲伤 害怕 厌恶 低落 惊讶 平静 温柔 激动 害羞 撒娇 冷酷 嘲讽 无奈 焦急 恐惧 疲惫 兴奋 委屈 坚定 戏谑 傲慢 甜蜜 严肃 疯狂 低语 怒吼 耳语 哽咽 叹息 冷漠 诚恳 慵懒 愉悦 紧张 决绝 虚弱 慌张 暧昧 命令 恳求 释然 宠溺 调侃 心疼 怨恨
+If none fits, use 平静.
+6. Do NOT output narration, description, actions, thoughts, or anything outside the quotes.
+7. No markdown, no numbering, no code fences, no explanations. Only the script lines. If there is no quoted dialogue, output nothing at all.
+
+EXAMPLE INPUT:
+Riku: "They're plants. Relax." Mizuki folded her arms. "You're impossible."
+
+EXAMPLE OUTPUT:
+[Riku][无奈]"They're plants. Relax."
+[Mizuki][生气]"You're impossible."
+```
+
+⚠️ 第 5 条的情绪词必须保持中文 —— 插件用中文词表查情绪向量，写成英文（happy / angry …）查不到，台词照样读，但情绪会失效。
+
 **注意事项：**
 
 1. 每条需要朗读的消息会多一次小请求，通常 1~3 秒；同一条消息重复播放会命中内存缓存，不会重复请求。
