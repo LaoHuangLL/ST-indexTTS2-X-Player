@@ -339,6 +339,8 @@ Now output ONLY the script lines.
 
 如果想把正文放到提示词指定的位置，就在模板里写 `{{text}}`（也支持 `{{正文}}` / `{{input}}` / `{{body}}` / `{{内容}}` / `{{原文}}`），插件会把占位符替换成正文，不再自动追加。
 
+还有一个 `{{characters}}`（也支持 `{{names}}` / `{{speakers}}` / `{{角色}}` / `{{角色名}}`）：插件会从这条回复里自动认出出现过的人名（`Name:` 前缀和 `[Name]` 标签，中英文都认，情绪标签会自动排除），替换成逗号分隔的清单。**换角色卡、换语种都不用改提示词**，所以**不要在人名清单上写死具体名字**。
+
 下面这份可以直接整段粘贴进「提取提示词」：
 
 ```text
@@ -348,7 +350,8 @@ RULES (strict):
 1. Copy the dialogue VERBATIM from inside quotation marks ("...", "...", "..." or "..."). Never paraphrase, translate, shorten, merge or add words. Keep the original language and punctuation.
 2. Output one line per utterance, in the exact original order.
 3. Line format: [Speaker][Emotion]"dialogue"
-4. Speaker: whoever says that line. Infer it from a leading "Name:" prefix, or from the narration right before or after the quote. Narration itself is NEVER spoken. If you cannot tell, use Narrator.
+4. Speaker: use the name of whoever says that line, EXACTLY as written in the reply - from a leading "Name:" prefix, a [Name] tag, or the narration right before or after the quote. Do not translate, rename or normalize it. Narration itself is NEVER spoken. Only if you truly cannot tell who is speaking, use Narrator.
+   Suggested cast (may be incomplete, ignore if wrong): {{characters}}
 5. Emotion: pick EXACTLY ONE word from the list below, copied character for character. These are Chinese words - DO NOT translate them, DO NOT invent English ones, DO NOT wrap them in quotes or brackets:
 开心 生气 悲伤 害怕 厌恶 低落 惊讶 平静 温柔 宠溺 欣慰 怀念 释然 喜极而泣 哭笑不得 惊喜 期待 小小的喜悦 傲娇 害羞 羞愤 烦躁 隐忍的愤怒 气急败坏 淡淡的忧伤 心酸 心疼 强忍难过 悲痛欲绝 心如死灰 绝望 紧张 惶恐 慌乱 忧虑 期待又不安 害怕但强装镇定 傲慢 嫌弃 嫉妒 讽刺 恨之入骨 略感意外 大惊失色 无奈 尴尬 麻木 调侃
 If none fits, use 平静.
@@ -360,7 +363,9 @@ Riku: "They're plants. Relax." Mizuki folded her arms. "You're impossible."
 
 EXAMPLE OUTPUT:
 [Riku][无奈]"They're plants. Relax."
-[Mizuki][生气]"You're impossible."
+[Riku][生气]"You're impossible."
+
+(The names Riku and Mizuki above are just placeholders - always use whatever names actually appear in the reply, in whatever language.)
 ```
 
 ⚠️ 第 5 条的情绪词必须保持中文 —— 插件用中文词表查情绪向量，写成英文（happy / angry …）查不到，台词照样读，但情绪会失效。

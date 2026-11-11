@@ -766,7 +766,8 @@ RULES (strict):
 1. Copy the dialogue VERBATIM from inside quotation marks ("...", "...", "..." or "..."). Never paraphrase, translate, shorten, merge or add words.
 2. Output one line per utterance, in the exact original order.
 3. Line format: [Speaker][Emotion]"dialogue"
-4. Speaker: whoever says that line. Infer it from a leading "Name:" prefix, or from the narration right before or after the quote. Narration itself is NOT spoken. If you cannot tell, use Narrator.
+4. Speaker: use the name of whoever says that line, EXACTLY as written in the reply - from a leading "Name:" prefix, a [Name] tag, or the narration right before or after the quote. Do not translate, rename or normalize it. Narration itself is NOT spoken. Only if you truly cannot tell who is speaking, use Narrator.
+   Suggested cast (may be incomplete, ignore if wrong): {{characters}}
 5. Emotion: pick EXACTLY ONE word from the list below, copied character for character (Chinese, do not translate):
 开心 生气 悲伤 害怕 厌恶 低落 惊讶 平静 温柔 宠溺 欣慰 怀念 释然 喜极而泣 哭笑不得 惊喜 期待 小小的喜悦 傲娇 害羞 羞愤 烦躁 隐忍的愤怒 气急败坏 淡淡的忧伤 心酸 心疼 强忍难过 悲痛欲绝 心如死灰 绝望 紧张 惶恐 慌乱 忧虑 期待又不安 害怕但强装镇定 傲慢 嫌弃 嫉妒 讽刺 恨之入骨 略感意外 大惊失色 无奈 尴尬 麻木 调侃
 If none fits, use 平静.
@@ -778,7 +779,9 @@ Riku: "They're plants. Relax." Mizuki folded her arms. "You're impossible."
 
 EXAMPLE OUTPUT:
 [Riku][无奈]"They're plants. Relax."
-[Mizuki][生气]"You're impossible."`;
+[Mizuki][生气]"You're impossible."
+
+(The names Riku and Mizuki above are just placeholders - always use whatever names actually appear in the reply, in whatever language.)`;
 
     function getExtractConfig() {
         const settings = getSettings() || {};
@@ -883,11 +886,37 @@ EXAMPLE OUTPUT:
 
     // 提示词里可以用 {{正文}} / {{text}} / {{input}} / {{body}} / {{内容}} / {{原文}} 指定正文位置；
     // 不写占位符时，正文会自动接在提示词后面。替换用函数形式，避免正文里的 $& 被当成替换模式。
+    // 从正文里自动认角色名（"Name:" 前缀 或 [Name] 标签），供提示词里的 {{characters}} 使用。
+    // 这样换角色卡、换语种都不用手改提示词。
+    function collectSpeakerNames(text) {
+        const names = [];
+        const add = (n) => {
+            const v = String(n || '').replace(/\s+/g, ' ').trim();
+            if (!v || v.length > 24 || names.includes(v)) return;
+            if (textEmotionVectorMap && Object.prototype.hasOwnProperty.call(textEmotionVectorMap, v)) return; // 情绪标签不是人名
+            names.push(v);
+        };
+        const s = String(text || '');
+        // "Name:" / "名字：" 前缀（英文、中文都认）
+        for (const m of s.matchAll(/(?:^|\n)[ \t]*([A-Za-z\u4e00-\u9fff][A-Za-z0-9_\u4e00-\u9fff'\- ]{0,23})[ \t]*[:：]/g)) add(m[1]);
+        // [Name] 标签
+        for (const m of s.matchAll(/\[([^\]\n]{1,24})\]/g)) add(m[1]);
+        return names;
+    }
+
+    const CHAR_TEXT_PLACEHOLDER = /\{\{\s*(?:characters|names|speakers|角色|角色名)\s*\}\}/gi;
+    const CHAR_TEXT_PLACEHOLDER_TEST = /\{\{\s*(?:characters|names|speakers|角色|角色名)\s*\}\}/i;
+
     const EXTRACT_TEXT_PLACEHOLDER = /\{\{\s*(?:text|input|body|正文|内容|原文)\s*\}\}/gi;
     const EXTRACT_TEXT_PLACEHOLDER_TEST = /\{\{\s*(?:text|input|body|正文|内容|原文)\s*\}\}/i;
 
     function buildExtractInstruction(template, text) {
-        const tpl = String(template || DEFAULT_EXTRACT_PROMPT);
+        let tpl = String(template || DEFAULT_EXTRACT_PROMPT);
+        if (CHAR_TEXT_PLACEHOLDER_TEST.test(tpl)) {
+            const found = collectSpeakerNames(text);
+            const list = found.length ? found.join(', ') : '(infer them from the reply)';
+            tpl = tpl.replace(CHAR_TEXT_PLACEHOLDER, () => list);
+        }
         if (EXTRACT_TEXT_PLACEHOLDER_TEST.test(tpl)) {
             return tpl.replace(EXTRACT_TEXT_PLACEHOLDER, () => text);
         }
