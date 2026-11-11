@@ -768,7 +768,7 @@ RULES (strict):
 3. Line format: [Speaker][Emotion]"dialogue"
 4. Speaker: whoever says that line. Infer it from a leading "Name:" prefix, or from the narration right before or after the quote. Narration itself is NOT spoken. If you cannot tell, use Narrator.
 5. Emotion: pick EXACTLY ONE word from the list below, copied character for character (Chinese, do not translate):
-开心 生气 悲伤 害怕 厌恶 低落 惊讶 平静 温柔 激动 害羞 撒娇 冷酷 嘲讽 无奈 焦急 恐惧 疲惫 兴奋 委屈 坚定 戏谑 傲慢 甜蜜 严肃 疯狂 低语 怒吼 耳语 哽咽 叹息 冷漠 诚恳 慵懒 愉悦 紧张 决绝 虚弱 慌张 暧昧 命令 恳求 释然 宠溺 调侃 心疼 怨恨
+开心 生气 悲伤 害怕 厌恶 低落 惊讶 平静 温柔 宠溺 欣慰 怀念 释然 喜极而泣 哭笑不得 惊喜 期待 小小的喜悦 傲娇 害羞 羞愤 烦躁 隐忍的愤怒 气急败坏 淡淡的忧伤 心酸 心疼 强忍难过 悲痛欲绝 心如死灰 绝望 紧张 惶恐 慌乱 忧虑 期待又不安 害怕但强装镇定 傲慢 嫌弃 嫉妒 讽刺 恨之入骨 略感意外 大惊失色 无奈 尴尬 麻木 调侃
 If none fits, use 平静.
 6. Do NOT output narration, description, actions or anything outside the quotes.
 7. No markdown, no numbering, no code fences, no explanations. Only script lines. If there is no quoted dialogue, output nothing.
