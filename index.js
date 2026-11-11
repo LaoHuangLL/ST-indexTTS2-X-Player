@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Thirteen-Moons
 // Licensed under AGPL-3.0; see LICENSE for full terms
 // Derivative works must retain attribution to Thirteen-Moons
-// v1.2.7
+// v1.2.8 (LaoHuangLL fork: optional LLM dialogue extraction before TTS)
 
 (function () {
     const extensionName = "st-indextts2";
@@ -54,6 +54,15 @@
             content: '# 格式输出规范\n**描写任何角色（主要角色、NPC、路人、旁白）说话时，必须严格遵守格式，对话单开一行**\n\n## 格式：\n[角色名][情感][场景]“对话内容”\n\n### 角色名：\n当前说话的人物名称。\n\n### 情感：\n每个角色仅在以下选择一个最适配于当下情境的使用，若无特别匹配的情绪，则使用[通常]。\n- 温暖柔和类：温柔、宠溺、欣慰、怀念、释然\n- 喜悦类：小小的喜悦、期待、开心、喜极而泣、哭笑不得、惊喜\n- 羞涩：害羞、傲娇\n- 愤怒类：生气、羞愤、烦躁、隐忍的愤怒、气急败坏\n- 悲伤类：淡淡的忧伤、低落、心酸、心疼、强忍难过、悲伤、悲痛欲绝、心如死灰、绝望\n- 恐惧与紧张类变体：忧虑、紧张、害怕但强装镇定、惶恐、期待又不安、害怕、慌乱\n- 厌恶类：傲慢、嫌弃、嫉妒、讽刺、厌恶、恨之入骨\n- 惊讶类：略感意外、惊讶、大惊失色\n- 其他类型：平静、通常、无奈、尴尬、麻木、调侃\n\n### 对话内容：\n用「」或 “” 包裹角色说出的台词。\n\n### 场景：\n仅从以下两个分类中**选择一个**使用，仅在列表选择，避免自创。NSFW内容出现时，需切换到NSFW场景音，若无对应场景可以不填场景。\n#### 正常场景列表：\n乡村清晨、公园氛围、厨房_切菜、雨声、城镇闹市、沙滩海鸥鸣叫、平稳的心跳声、浴室_淋浴\n#### NSFW场景列表：\n床的摇晃声、浴室性爱声、女性轻微呻吟、男性喘息\n\n## 格式示例：\n[小明][开心][春日公园]“今天的天气真好呢。”\n他悠闲地在公园中漫步，看着来往的人群。',
             depth: 4,
             role: "system"
+        },
+        // LLM 智能提取：消息里没有 [角色] 标记时，先用一次独立 LLM 请求把台词提取成 GAL 格式
+        llmExtract: {
+            enabled: false,
+            timeout: 30000,
+            maxChars: 8000,
+            minQuoteRatio: 0.6,
+            profileId: '',
+            prompt: ''
         },
         regexFilter: {
             enabled: false,
@@ -744,6 +753,196 @@
      * 剥离思考类标签（think/thinking/thought/summary/details）及其全部内容
      * 兼容两种形式：<think>...</think> 和被HTML转义的 &lt;think&gt;...&lt;/think&gt;
      */
+    // ==================== LLM 智能提取（可选） ====================
+    // 作用：消息里没有 [角色] 标记时（例如 AI 输出 "Riku: ..."），
+    // 用当前 SillyTavern 的 API 做一次独立请求，把台词逐句提取成 GAL 格式。
+    // 特点：不写入聊天记录、不改动主上下文、不依赖世界书；失败自动回退到原来的单人朗读。
+    const LLM_EXTRACT_CACHE = new Map();
+    const LLM_EXTRACT_CACHE_MAX = 64;
+
+    const DEFAULT_EXTRACT_PROMPT = `You are a dialogue EXTRACTOR for a text-to-speech player. Read the assistant reply and output ONLY the spoken lines.
+
+RULES (strict):
+1. Copy the dialogue VERBATIM from inside quotation marks ("...", "...", "..." or "..."). Never paraphrase, translate, shorten, merge or add words.
+2. Output one line per utterance, in the exact original order.
+3. Line format: [Speaker][Emotion]"dialogue"
+4. Speaker: whoever says that line. Infer it from a leading "Name:" prefix, or from the narration right before or after the quote. Narration itself is NOT spoken. If you cannot tell, use Narrator.
+5. Emotion: pick EXACTLY ONE word from the list below, copied character for character (Chinese, do not translate):
+开心 生气 悲伤 害怕 厌恶 低落 惊讶 平静 温柔 激动 害羞 撒娇 冷酷 嘲讽 无奈 焦急 恐惧 疲惫 兴奋 委屈 坚定 戏谑 傲慢 甜蜜 严肃 疯狂 低语 怒吼 耳语 哽咽 叹息 冷漠 诚恳 慵懒 愉悦 紧张 决绝 虚弱 慌张 暧昧 命令 恳求 释然 宠溺 调侃 心疼 怨恨
+If none fits, use 平静.
+6. Do NOT output narration, description, actions or anything outside the quotes.
+7. No markdown, no numbering, no code fences, no explanations. Only script lines. If there is no quoted dialogue, output nothing.
+
+EXAMPLE INPUT:
+Riku: "They're plants. Relax." Mizuki folded her arms. "You're impossible."
+
+EXAMPLE OUTPUT:
+[Riku][无奈]"They're plants. Relax."
+[Mizuki][生气]"You're impossible."`;
+
+    function getExtractConfig() {
+        const settings = getSettings() || {};
+        const cfg = settings.llmExtract || {};
+        const pos = (v, d) => (Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v) : d);
+        return {
+            enabled: cfg.enabled === true,
+            timeout: pos(cfg.timeout, 30000),
+            maxChars: pos(cfg.maxChars, 8000),
+            minQuoteRatio: Number.isFinite(Number(cfg.minQuoteRatio)) ? Math.max(0, Math.min(1, Number(cfg.minQuoteRatio))) : 0.6,
+            profileId: String(cfg.profileId || '').trim(),
+            prompt: String(cfg.prompt || '').trim() || DEFAULT_EXTRACT_PROMPT
+        };
+    }
+
+    function estimateQuotePairs(text) {
+        if (!text) return 0;
+        const m = String(text).match(/"[^"\n]{1,500}"|“[^”\n]{1,500}”|「[^」\n]{1,500}」|『[^』\n]{1,500}』/g);
+        return m ? m.length : 0;
+    }
+
+    function withTimeout(promise, ms) {
+        let timer = null;
+        const guard = new Promise((_, reject) => {
+            timer = setTimeout(() => reject(new Error('LLM extracting timeout (' + Math.round(ms / 1000) + 's)')), ms);
+        });
+        return Promise.race([promise, guard]).finally(() => { if (timer) clearTimeout(timer); });
+    }
+
+    function normalizeExtractOutput(raw) {
+        if (!raw || typeof raw !== 'string') return '';
+        let s = raw.replace(/```[a-zA-Z]*\s*/g, '').replace(/```/g, '');
+        const lines = s.split('\n').map(l => l.trim()).filter(Boolean);
+        const out = [];
+        const seen = new Set();
+        for (const line of lines) {
+            const cleaned = line.replace(/^[-*•·]\s*/, '').replace(/^\d+[.、)]\s*/, '').trim();
+            if (!/^\[[^\]\n]{1,40}\]/.test(cleaned)) continue;
+            const parsed = parseVNLine(cleaned);
+            if (!parsed || !parsed.dialogue) continue;
+            if (seen.has(cleaned)) continue;
+            seen.add(cleaned);
+            out.push(cleaned);
+        }
+        return out.join('\n');
+    }
+
+    function getConnectionProfiles() {
+        const ctx = getContext();
+        const svc = ctx?.ConnectionManagerRequestService;
+        if (!svc || typeof svc.getSupportedProfiles !== 'function') return [];
+        try {
+            return svc.getSupportedProfiles() || [];
+        } catch (e) {
+            console.warn('[IndexTTS2] 读取连接配置失败（连接管理器可能被禁用）:', e);
+            return [];
+        }
+    }
+
+    function extractTextFromResponse(res) {
+        if (!res) return '';
+        if (typeof res === 'string') return res;
+        if (typeof res.content === 'string') return res.content;
+        if (typeof res.text === 'string') return res.text;
+        const choice = res.choices && res.choices[0];
+        if (choice && choice.message && typeof choice.message.content === 'string') return choice.message.content;
+        return '';
+    }
+
+    async function runExtractRequest(instruct, cfg) {
+        const ctx = getContext();
+        // 1) 指定了连接配置：走 ConnectionManagerRequestService（可以用另一套更轻量的 API）
+        if (cfg.profileId) {
+            const svc = ctx?.ConnectionManagerRequestService;
+            if (!svc || typeof svc.sendRequest !== 'function') {
+                throw new Error('当前 SillyTavern 不支持连接配置请求（Connection Manager 未启用）');
+            }
+            const res = await svc.sendRequest(cfg.profileId, instruct, 1200, {
+                stream: false,
+                extractData: true,
+                includePreset: true,
+                includeInstruct: true
+            });
+            return extractTextFromResponse(res);
+        }
+        // 2) 跟随当前聊天 API
+        const quietFn = ctx?.generateQuietPrompt;
+        const rawFn = ctx?.generateRaw;
+        if (typeof quietFn === 'function') {
+            // SillyTavern 1.13+ 改成对象参数：generateQuietPrompt({ quietPrompt, skipWIAN, ... })
+            // 更早的版本是位置参数：(prompt, skipWIAN)。形参个数为 0 说明是解构默认值写法。
+            const job = quietFn.length === 0
+                ? quietFn.call(ctx, { quietPrompt: instruct, skipWIAN: true, responseLength: 1200 })
+                : quietFn.call(ctx, instruct, true);
+            return await job;
+        }
+        if (typeof rawFn === 'function') {
+            return await rawFn.call(ctx, { prompt: instruct });
+        }
+        throw new Error('当前 SillyTavern 版本不提供 generateQuietPrompt / generateRaw');
+    }
+
+    async function extractVNWithLLM(text, mesId) {
+        const cfg = getExtractConfig();
+        if (!cfg.enabled) return null;
+        const plain = String(text || '').trim();
+        if (!plain) return null;
+        if (plain.length > cfg.maxChars) {
+            console.warn('[IndexTTS2] LLM 提取跳过：文本 ' + plain.length + ' 字，超过上限 ' + cfg.maxChars);
+            return null;
+        }
+        const cacheKey = mesId ? String(mesId) : '';
+        if (cacheKey) {
+            const hit = LLM_EXTRACT_CACHE.get(cacheKey);
+            if (hit && hit.text === plain && hit.result) {
+                console.log('[IndexTTS2] LLM 提取缓存命中（消息 ' + cacheKey + '）');
+                return hit.result;
+            }
+        }
+        const ctx = getContext();
+        if (!cfg.profileId) {
+            const canQuiet = typeof ctx?.generateQuietPrompt === 'function';
+            const canRaw = typeof ctx?.generateRaw === 'function';
+            if (!canQuiet && !canRaw) {
+                console.warn('[IndexTTS2] 当前 SillyTavern 版本不提供 generateQuietPrompt / generateRaw，LLM 提取不可用');
+                if (window.toastr) window.toastr.warning('当前 SillyTavern 版本不支持 LLM 提取（缺少 generateQuietPrompt）');
+                return null;
+            }
+        }
+        const instruct = cfg.prompt + '\n\n---\n[ASSISTANT REPLY TO EXTRACT - START]\n' + plain + '\n[ASSISTANT REPLY TO EXTRACT - END]\n\nNow output ONLY the script lines.';
+        const t0 = performance.now();
+        let raw = '';
+        try {
+            raw = await withTimeout(Promise.resolve(runExtractRequest(instruct, cfg)), cfg.timeout);
+        } catch (e) {
+            console.error('[IndexTTS2] LLM 提取失败:', e);
+            if (window.toastr) window.toastr.warning('LLM 提取失败，回退单人朗读：' + (e?.message || e));
+            return null;
+        }
+        const lines = normalizeExtractOutput(raw);
+        const cost = Math.round(performance.now() - t0);
+        if (!lines) {
+            console.warn('[IndexTTS2] LLM 提取结果为空（耗时 ' + cost + 'ms），回退单人朗读');
+            return null;
+        }
+        const quotePairs = estimateQuotePairs(plain);
+        const lineCount = lines.split('\n').filter(Boolean).length;
+        if (quotePairs > 0 && lineCount < Math.max(1, Math.floor(quotePairs * cfg.minQuoteRatio))) {
+            console.warn('[IndexTTS2] LLM 提取疑似漏句（引号对 ' + quotePairs + ' / 提取 ' + lineCount + ' 行，阈值 ' + cfg.minQuoteRatio + '），回退单人朗读');
+            if (window.toastr) window.toastr.warning('LLM 提取疑似漏句，已回退原文朗读');
+            return null;
+        }
+        console.log('[IndexTTS2] LLM 提取成功：' + lineCount + ' 行（引号对 ' + quotePairs + '，耗时 ' + cost + 'ms）');
+        if (cacheKey) {
+            LLM_EXTRACT_CACHE.set(cacheKey, { text: plain, result: lines, ts: Date.now() });
+            while (LLM_EXTRACT_CACHE.size > LLM_EXTRACT_CACHE_MAX) {
+                const oldest = LLM_EXTRACT_CACHE.keys().next().value;
+                if (oldest === undefined) break;
+                LLM_EXTRACT_CACHE.delete(oldest);
+            }
+        }
+        return lines;
+    }
+
     function stripThinkBlocks(text) {
         if (!text) return text;
         const before = text;
@@ -1486,7 +1685,7 @@
      * 从消息中收集需要推理的文本行
      * 架构重组：文本提取 -> 角色路由 -> 解析模式分发 -> 分段处理
      */
-    function collectVNLinesFromMessage(msg) {
+    async function collectVNLinesFromMessage(msg) {
         const result = [];
         if (!msg) return result;
         const mesText = msg.querySelector('.mes_text');
@@ -1602,7 +1801,21 @@
         }
 
         // GAL 模式逻辑
-        const hasVNMarkers = /\[[^\]]+\]/.test(textContent);
+        let hasVNMarkers = /\[[^\]]+\]/.test(textContent);
+
+        // 可选：没有 GAL 标记时，先让 LLM 把台词逐句提取成 [角色][情绪]"台词" 格式
+        if (!hasVNMarkers && settings.llmExtract && settings.llmExtract.enabled) {
+            try {
+                const extracted = await extractVNWithLLM(textContent, mesId);
+                if (extracted) {
+                    textContent = extracted;
+                    hasVNMarkers = true;
+                }
+            } catch (e) {
+                console.error('[IndexTTS2] LLM 提取异常，回退原文朗读:', e);
+            }
+        }
+
         if (!hasVNMarkers) {
             // 无 GAL 标记，回退到单人朗读
             const trimmed = textContent.trim();
@@ -2318,7 +2531,7 @@
         }
         const settings = getSettings();
         try {
-            const lines = collectVNLinesFromMessage(msg);
+            const lines = await collectVNLinesFromMessage(msg);
             const list = [];
             const unvoicedCount = lines.filter(l => !l.voice).length;
             if (!lines.length) {
@@ -2727,6 +2940,17 @@
                             <div class="indextts-setting-row"><label>角色</label><select id="indextts-prompt-role" class="text_pole"><option value="system"${settings.promptInjection?.role === 'system' ? ' selected' : ''}>System</option><option value="user"${settings.promptInjection?.role === 'user' ? ' selected' : ''}>User</option><option value="assistant"${settings.promptInjection?.role === 'assistant' ? ' selected' : ''}>Assistant</option></select></div>
                             <div class="indextts-setting-row" style="flex-direction:column; align-items:flex-start;"><label style="margin-bottom:5px;">提示词内容</label><textarea id="indextts-prompt-content" class="text_pole" rows="4" placeholder="输入要注入的提示词...">${settings.promptInjection?.content || ''}</textarea></div>
                         </div>
+                        <!-- 模块：LLM 智能提取 -->
+                        <div class="indextts-setting-module">
+                            <div class="indextts-module-header">🧠 LLM 智能提取（可选）</div>
+                            <div class="indextts-setting-row checkbox-row"><label for="indextts-llm-extract-enable">启用（消息无 [角色] 标记时自动提取台词）</label><input type="checkbox" id="indextts-llm-extract-enable"${settings.llmExtract?.enabled ? ' checked' : ''}></div>
+                            <div class="indextts-setting-row"><label>提取用的 API</label><select id="indextts-llm-extract-profile" class="text_pole"><option value="">跟随当前聊天 API</option></select></div>
+                            <div class="indextts-setting-row"><label>超时（毫秒）</label><input type="number" id="indextts-llm-extract-timeout" class="text_pole" value="${settings.llmExtract?.timeout ?? 30000}" min="3000" step="1000"></div>
+                            <div class="indextts-setting-row"><label>最大字数</label><input type="number" id="indextts-llm-extract-maxchars" class="text_pole" value="${settings.llmExtract?.maxChars ?? 8000}" min="500" step="500"></div>
+                            <div class="indextts-setting-row"><label>漏句阈值</label><input type="number" id="indextts-llm-extract-ratio" class="text_pole" value="${settings.llmExtract?.minQuoteRatio ?? 0.6}" min="0" max="1" step="0.05"></div>
+                            <div class="indextts-setting-row" style="flex-direction:column; align-items:flex-start;"><label style="margin-bottom:5px;">提取提示词（留空=内置模板）</label><textarea id="indextts-llm-extract-prompt" class="text_pole" rows="5" placeholder="留空使用内置模板">${settings.llmExtract?.prompt || ''}</textarea></div>
+                            <div class="indextts-setting-row" style="font-size:0.85em; opacity:0.75;"><span>仅在 GAL 模式且消息里没有 [角色] 标记时触发；用当前 API 发一次独立请求，不写入聊天记录、不改动主上下文。提取结果按消息缓存，失败或疑似漏句会自动回退到原文朗读。</span></div>
+                        </div>
                         <!-- 模块2：播放与自动化 -->
                         <div class="indextts-setting-module">
                             <div class="indextts-module-header">▶️ 播放与自动化</div>
@@ -2920,6 +3144,54 @@
 
         const bindPrompt = (id, field) => { const el = panel.querySelector(id); if (el) { el.oninput = el.onchange = (e) => { const s = getSettings(); if (!s.promptInjection || typeof s.promptInjection !== 'object') { s.promptInjection = JSON.parse(JSON.stringify(defaultSettings.promptInjection)); } s.promptInjection[field] = e.target.type === 'checkbox' ? e.target.checked : e.target.value; saveSettings(); }; } };
         bindPrompt('#indextts-prompt-enable', 'enabled'); bindPrompt('#indextts-prompt-depth', 'depth'); bindPrompt('#indextts-prompt-role', 'role'); bindPrompt('#indextts-prompt-content', 'content');
+        const bindExtract = (id, field, kind) => {
+            const el = panel.querySelector(id);
+            if (!el) return;
+            el.oninput = el.onchange = (e) => {
+                const s = getSettings();
+                if (!s.llmExtract || typeof s.llmExtract !== 'object') { s.llmExtract = JSON.parse(JSON.stringify(defaultSettings.llmExtract)); }
+                if (e.target.type === 'checkbox') s.llmExtract[field] = e.target.checked;
+                else if (kind === 'number') { const n = Number(e.target.value); s.llmExtract[field] = Number.isFinite(n) && n >= 0 ? n : defaultSettings.llmExtract[field]; }
+                else s.llmExtract[field] = e.target.value;
+                saveSettings();
+            };
+        };
+        const fillExtractProfiles = () => {
+            const sel = panel.querySelector('#indextts-llm-extract-profile');
+            if (!sel) return;
+            const s = getSettings();
+            const current = (s.llmExtract && s.llmExtract.profileId) || '';
+            const profiles = getConnectionProfiles();
+            const opts = ['<option value="">跟随当前聊天 API</option>'];
+            for (const p of profiles) {
+                const name = p?.name || p?.id || '未命名';
+                const model = p?.model ? (' · ' + p.model) : '';
+                opts.push('<option value="' + escapeHtml(String(p?.id || '')) + '">' + escapeHtml(name + model) + '</option>');
+            }
+            sel.innerHTML = opts.join('');
+            const exists = profiles.some(p => String(p?.id || '') === current);
+            sel.value = exists ? current : '';
+            if (current && !exists) {
+                s.llmExtract.profileId = '';
+                saveSettings();
+            }
+        };
+        fillExtractProfiles();
+        bindExtract('#indextts-llm-extract-enable', 'enabled');
+        bindExtract('#indextts-llm-extract-timeout', 'timeout', 'number');
+        bindExtract('#indextts-llm-extract-maxchars', 'maxChars', 'number');
+        bindExtract('#indextts-llm-extract-ratio', 'minQuoteRatio', 'number');
+        bindExtract('#indextts-llm-extract-prompt', 'prompt');
+        const extractProfileSel = panel.querySelector('#indextts-llm-extract-profile');
+        if (extractProfileSel) {
+            extractProfileSel.onchange = (e) => {
+                const s = getSettings();
+                if (!s.llmExtract || typeof s.llmExtract !== 'object') { s.llmExtract = JSON.parse(JSON.stringify(defaultSettings.llmExtract)); }
+                s.llmExtract.profileId = e.target.value || '';
+                saveSettings();
+            };
+        }
+
 
         const ambVolSlider = panel.querySelector('#indextts-ambient-volume');
         if (ambVolSlider) { ambVolSlider.oninput = (e) => { const v = parseFloat(e.target.value); AmbientPlayer.setVolume(v); const disp = panel.querySelector('#indextts-ambient-volume-val'); if (disp) disp.textContent = Math.round(v * 100) + '%'; }; }
